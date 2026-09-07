@@ -295,10 +295,6 @@ static struct ethernet_context *ethernet_mcast_ctx(struct net_if *iface)
 		return NULL;
 	}
 
-	if (!(net_eth_get_hw_capabilities(iface) & ETHERNET_HW_FILTERING)) {
-		return NULL;
-	}
-
 	return net_if_l2_data(iface);
 }
 
@@ -1362,11 +1358,6 @@ void ethernet_init(struct net_if *iface)
 	NET_DBG("Initializing Ethernet L2 %p for iface %d (%p)", ctx,
 		net_if_get_by_iface(iface), iface);
 
-#if defined(CONFIG_NET_DSA)
-	/* DSA port may need to handle flags */
-	dsa_eth_init(iface);
-#endif
-
 	if (IS_ENABLED(CONFIG_ETH_NET_IF_NO_AUTO_START)) {
 		/* Do not start Ethernet interface automatically */
 		net_if_flag_set(iface, NET_IF_NO_AUTO_START);
@@ -1381,6 +1372,11 @@ void ethernet_init(struct net_if *iface)
 	if ((caps & ETHERNET_PROMISC_MODE) != 0) {
 		ctx->ethernet_l2_flags |= NET_L2_PROMISC_MODE;
 	}
+
+#if defined(CONFIG_NET_DSA)
+	/* DSA port may need to handle flags */
+	dsa_eth_init(iface);
+#endif
 
 #if defined(NET_ETH_MCAST_FILTER_SUPPORTED) && defined(CONFIG_NET_NATIVE_IP)
 	if ((caps & ETHERNET_HW_FILTERING) != 0) {

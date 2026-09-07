@@ -158,6 +158,8 @@ Removed APIs and options
     * The CMake ``flash``, ``debug``, ``debugserver``, ``attach`` and ``rtt`` targets,
       replaced by the corresponding ``west`` commands
     * The ``WEST_DIR`` build system variable
+    * The ``ZephyrUnittest`` CMake package, replaced by
+      ``find_package(Zephyr COMPONENTS unittest)``
 
 * CAN
 
@@ -178,6 +180,10 @@ Removed APIs and options
 * hawkBit
 
     * ``<zephyr/mgmt/hawkbit.h>``
+
+* Devicetree
+
+    * ``zephyr,memory-region-mpu``
 
 * LLEXT
 
@@ -227,11 +233,24 @@ Removed APIs and options
     * ``owner-id``, ``perm-read``, ``perm-write``, ``perm-execute``, ``perm-secure`` and
       ``non-secure-callable`` properties of :dtcompatible:`nordic,owned-memory` and
       :dtcompatible:`nordic,owned-partitions`
+    * ``CONFIG_BOARD_ENABLE_CPUNET``, replaced by :kconfig:option:`CONFIG_SOC_NRF53_CPUNET_ENABLE`
+    * ``CONFIG_GPIO_AS_PINRESET``
+    * ``CONFIG_NRFS_LOCAL_DOMAIN_DVFS_SCALE_DOWN_AFTER_INIT``, replaced by
+      :kconfig:option:`CONFIG_CLOCK_CONTROL_NRF_HSFLL_LOCAL_REQ_LOW_FREQ`
+    * ``CONFIG_SOC_DCDC_NRF52X``
+    * ``CONFIG_SOC_DCDC_NRF52X_HV``
+    * ``CONFIG_SOC_DCDC_NRF53X_APP``
+    * ``CONFIG_SOC_DCDC_NRF53X_NET``
+    * ``CONFIG_SOC_DCDC_NRF53X_HV``
 
 * Random
 
     * ``CONFIG_CTR_DRBG_CSPRNG_GENERATOR``
     * ``CONFIG_CS_CTR_DRBG_PERSONALIZATION``
+
+* Shell
+
+    * ``kernel log_level``, replaced by ``log enable``
 
 * SPI
 
@@ -322,6 +341,19 @@ Deprecated APIs and options
   * Deprecated :kconfig:option:`CONFIG_NET_L2_PTP`.
     Used :kconfig:option:`CONFIG_NET_L2_PTP_TIMESTAMPING` instead.
 
+* SPI
+
+  * The SPI API now uses inclusive terminology (controller/peripheral, SDO/SDI). The former
+    names are deprecated: ``SPI_OP_MODE_MASTER``/``SPI_OP_MODE_SLAVE`` (use
+    :c:macro:`SPI_OP_MODE_CONTROLLER`/:c:macro:`SPI_OP_MODE_PERIPHERAL`), the ``slave`` member
+    of :c:struct:`spi_config` (use ``peripheral``), the ``SPI_MOSI_OVERRUN_*`` macros (use
+    :c:macro:`SPI_SDO_OVERRUN_UNKNOWN`, :c:macro:`SPI_SDO_OVERRUN_DT`,
+    :c:macro:`SPI_SDO_OVERRUN_DT_INST`), ``CONFIG_SPI_SLAVE`` (use
+    :kconfig:option:`CONFIG_SPI_PERIPHERAL`), the ``zephyr,bt-hci-spi-slave`` devicetree
+    compatible (use :dtcompatible:`zephyr,bt-hci-spi-peripheral`) and the
+    ``mosi-gpios``/``miso-gpios``-style devicetree properties of the bindings listed in the
+    migration guide.
+
 * Timer
 
   * New :c:func:`sys_clock_no_timeout` hook for handling of
@@ -383,6 +415,7 @@ New APIs and options
 
   * Audio
 
+    * :c:func:`bt_aics_client_free_instance`
     * :c:func:`bt_ascs_register`
     * :c:func:`bt_ascs_unregister`
     * :c:func:`bt_bap_unicast_client_qos_from_group`
@@ -397,6 +430,7 @@ New APIs and options
     * :c:member:`bt_bap_unicast_group_info.c_to_p_ft`
     * :c:member:`bt_bap_unicast_group_info.p_to_c_ft`
     * :c:member:`bt_bap_unicast_group_info.iso_interval`
+    * :c:func:`bt_vocs_client_free_instance`
 
   * Host
 
@@ -408,6 +442,10 @@ New APIs and options
     * :c:member:`bt_conn_cb.le_param_update_rejected`
     * ``BT_HCI_QUIRK_NO_FLOW_CONTROL`` HCI device quirk for controllers that
       advertise but reject the controller to host flow control commands.
+    * :c:member:`bt_rfcomm_dlc.rx_credit_limit` to configure per-DLC initial RX credit count.
+    * :c:func:`bt_rfcomm_dlc_recv_complete` to return RX credits to the peer. Applications can
+      return ``-EINPROGRESS`` from the :c:member:`bt_rfcomm_dlc_ops.recv` callback to defer buffer
+      release and flow-control credit refill until processing is complete.
 
   * Mesh
 
@@ -550,6 +588,7 @@ New APIs and options
     Memberships still held when the socket is closed are dropped automatically,
     and :kconfig:option:`CONFIG_NET_SOCKETS_PACKET_MCAST_MEMBERSHIP_COUNT` sets
     how many memberships can be active at the same time.
+  * :kconfig:option:`CONFIG_PTP_NETWORK_MODE_HYBRID`
 
 * Power Management
 
@@ -575,6 +614,10 @@ New APIs and options
 * Ring buffer
 
   * :c:struct:`sys_ringq` (see :ref:`fixed_size_ringq_api`)
+
+* USB Type-C
+
+  * :kconfig:option:`CONFIG_USBC_LOG_PD_MSG_NAMES`
 
 * Zbus
 
@@ -857,6 +900,7 @@ New Boards
 * Silicon Laboratories
 
   * :zephyr:board:`kg100s_rb4332a` (``kg100s_rb4332a``)
+  * :zephyr:board:`siwx917_ek2708a` (``siwx917_ek2708a``)
   * :zephyr:board:`xg26_dk2608a` (``xg26_dk2608a``)
   * :zephyr:board:`xg26_rb4121a` (``xg26_rb4121a``)
 
@@ -1442,6 +1486,12 @@ New Drivers
 
 * Networking
 
+  * gPTP
+
+    * :kconfig:option:`CONFIG_NET_GPTP_STATIC_TIME_RECEIVER` operates the node as a
+      statically configured time receiver, so it can synchronize through IEEE 802.1AS
+      automotive profile bridges that transmit no Announce messages.
+
   * :dtcompatible:`st,stm32wba-radio` (:github:`110546`)
 
 * :abbr:`OPAMP (Operational Amplifier)`
@@ -1563,6 +1613,7 @@ New Drivers
   * :dtcompatible:`microchip,pac194x` (:github:`105902`)
   * :dtcompatible:`nordic,nrf-vbat` (:github:`106102`)
   * :dtcompatible:`nxp,mcux-eqdc` (:github:`111927`)
+  * :dtcompatible:`plantower,pmsa003i` (:github:`113377`)
   * :dtcompatible:`raspberrypi,bcm283x-vc-thermal` (:github:`110192`)
   * :dtcompatible:`realtek,bee-aon-qdec` (:github:`105129`)
   * :dtcompatible:`realtek,bee-basic-qdec` (:github:`105129`)

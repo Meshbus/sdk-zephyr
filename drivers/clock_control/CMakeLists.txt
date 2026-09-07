@@ -81,6 +81,7 @@ if(CONFIG_CLOCK_CONTROL_ESP32)
 endif()
 
 # zephyr-keep-sorted-start
+zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_ADI_AXI_CLKGEN clock_control_adi_axi_clkgen.c)
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_ADSP clock_control_adsp.c)
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_AGILEX5 clock_control_agilex5.c)
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_AGILEX5 clock_control_agilex5_ll.c)
@@ -176,6 +177,7 @@ zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_SMARTBOND clock_control_smartb
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_SYNA_SR100 clock_control_syna_sr100.c)
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_TISCI clock_control_tisci.c)
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_WCH_RCC clock_control_wch_rcc.c)
+zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_XCLK_WIZ clock_control_xclk_wiz.c)
 zephyr_library_sources_ifdef(CONFIG_SOC_SERIES_AGILEX clock_agilex.c)
 zephyr_library_sources_ifdef(CONFIG_SOC_SERIES_AGILEX clock_agilex_ll.c)
 # zephyr-keep-sorted-stop

@@ -650,7 +650,7 @@ static int sx126x_init(const struct device *dev)
 		.lbm_common.dio1 = GPIO_DT_SPEC_GET(node_id, dio1_gpios),                          \
 		.lbm_common.duty_cycle_supported = true,                                        \
 		.spi = SPI_DT_SPEC_GET(                                                            \
-			node_id, SPI_WORD_SET(8) | SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB),         \
+			node_id, SPI_WORD_SET(8) | SPI_OP_MODE_CONTROLLER | SPI_TRANSFER_MSB),     \
 		.reset = GPIO_DT_SPEC_GET(node_id, reset_gpios),                                   \
 		.busy = GPIO_DT_SPEC_GET(node_id, busy_gpios),                                     \
 		.ant_enable = GPIO_DT_SPEC_GET_OR(node_id, antenna_enable_gpios, {0}),             \
