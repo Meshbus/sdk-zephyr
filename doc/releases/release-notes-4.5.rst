@@ -185,6 +185,11 @@ Removed APIs and options
 
     * ``zephyr,memory-region-mpu``
 
+* Ethernet
+
+    * The NuMaker Ethernet driver with ``CONFIG_ETH_NUMAKER`` is superseded by
+      :kconfig:option:`CONFIG_ETH_NUMAKER_DWC_ETHER_1000`. See the migration guide.
+
 * LLEXT
 
     * ``llext_get_fn_table``, replaced by ``llext_get_fn_table_entry``
@@ -375,6 +380,16 @@ Deprecated APIs and options
     :c:func:`ring_buf_item_get`, :c:func:`ring_buf_item_space_get`) has been deprecated in favor of
     :c:struct:`sys_ringq` (see :ref:`fixed_size_ringq_api`).
 
+  * The zero-copy claim/finish API (:c:func:`ring_buf_put_claim`, :c:func:`ring_buf_put_finish`,
+    :c:func:`ring_buf_get_claim`, :c:func:`ring_buf_get_finish`) has been deprecated in favor of
+    the new :c:func:`ring_buf_put_ptr` / :c:func:`ring_buf_get_ptr` API. Code still using it must
+    enable :kconfig:option:`CONFIG_RING_BUFFER`.
+
+  * :kconfig:option:`CONFIG_RING_BUFFER` is deprecated. The ring buffer API is now header-only and
+    always available, so the option is no longer required to use ring buffers. It now only serves
+    as the deprecated switch that restores the legacy claim/finish and item APIs while out-of-tree
+    code migrates to the replacement APIs.
+
 * Networking
 
   * Deprecated LLMNR support (:kconfig:option:`CONFIG_LLMNR_RESOLVER` and
@@ -514,6 +529,7 @@ New APIs and options
     * :c:func:`bt_conn_take`
     * :c:func:`bt_conn_drop`
     * :c:func:`bt_iso_chan_state_str`
+    * :c:member:`bt_iso_chan_ops.send_failed`
     * :c:func:`bt_iso_get_chan_by_conn`
     * :c:func:`bt_le_per_adv_update_did`
     * :c:member:`bt_le_adv_param.tx_power` and :c:enumerator:`BT_LE_ADV_OPT_TX_POWER`
@@ -528,6 +544,12 @@ New APIs and options
     * HCI packet helpers (:c:macro:`BT_HCI_PKT_CMD_DEFINE`, :c:func:`bt_hci_pkt_push_cmd_hdr`,
       :c:func:`bt_hci_pkt_parse_cmd_rsp` and friends) for framing HCI command packets and
       parsing command responses independently of the Host.
+    * :c:func:`bt_hci_lockstep_cmd_send_sync`
+    * :c:func:`bt_le_bond_addr_res_support`, :c:enum:`bt_le_addr_res_support` and
+      :c:member:`bt_conn_auth_info_cb.addr_res_support_read`
+    * :c:enumerator:`BT_LE_SCAN_OPT_EXT_FILTER_POLICY`
+    * :kconfig:option:`CONFIG_BT_SCAN_EXT_FILTER_POLICY`
+    * :c:member:`bt_le_scan_recv_info.direct_addr`
 
   * Mesh
 
@@ -638,6 +660,10 @@ New APIs and options
 
   * :c:enumerator:`CELLULAR_MODEM_INFO_SERIAL_NUMBER`
 
+* Multimedia Pipeline
+
+  * :kconfig:option:`CONFIG_MPIPE` (see :ref:`mpipe`)
+
 * Network
 
   * Add :c:func:`net_eth_set_if_type_wifi` to set the ethernet interface type to Wi-Fi.
@@ -724,6 +750,10 @@ New APIs and options
 * Ring buffer
 
   * :c:struct:`sys_ringq` (see :ref:`fixed_size_ringq_api`)
+  * :c:func:`ring_buf_put_ptr`
+  * :c:func:`ring_buf_get_ptr`
+  * :c:func:`ring_buf_commit`
+  * :c:func:`ring_buf_consume`
 
 * Secure Storage
 
@@ -1455,6 +1485,7 @@ New Drivers
   * :dtcompatible:`nxp,lpc-pmc-hwinfo` (:github:`114693`)
   * :dtcompatible:`nxp,mc-rgm` (:github:`111359`)
   * :dtcompatible:`nxp,otp-uid` (:github:`111493`)
+  * :dtcompatible:`zephyr,hwinfo-nvmem` (:github:`118693`)
 
 * :abbr:`I2C (Inter-Integrated Circuit)`
 
@@ -1925,6 +1956,24 @@ Libraries / Subsystems
     * The image management client now supports SHA-512 image digests. It can
       list and select images for testing or confirmation on targets built with
       :kconfig:option:`CONFIG_MCUBOOT_BOOTLOADER_USES_SHA512`.
+* Secure Storage
+
+  * The ``psa_its_get*()`` functions now return ``PSA_ERROR_INVALID_SIGNATURE`` or
+    ``PSA_ERROR_DATA_CORRUPT`` for an entry that fails authentication or is malformed,
+    instead of ``PSA_ERROR_GENERIC_ERROR``.
+
+  * The ITS operations that modify an entry are now serialized, and discarding an entry
+    that cannot be read back is logged as a warning.
+
+  * ``psa_its_get()`` called with a ``data_size`` of 0 now reports whether the entry exists
+    and is valid instead of always returning ``PSA_SUCCESS``.
+
+* Multimedia Pipeline
+
+  * Introducing :ref:`mpipe`, a new subsystem for building multimedia
+    applications out of reusable elements - sources, transforms and sinks -
+    linked together into a pipeline. It lets an application describe the media
+    flow it wants instead of driving each audio, video or display device itself.
 
 * Video
 
@@ -1965,6 +2014,10 @@ Devicetree
 * The ADC shell now enumerates ADC controllers through the ``adc`` device
   class instead of a hardcoded list of compatibles, so it also covers
   out-of-tree ADC drivers.
+
+* The I3C shell now enumerates I3C controllers through the ``i3c`` device
+  class instead of a hardcoded list of compatibles, so it also covers
+  out-of-tree I3C drivers.
 
 Other notable changes
 *********************
