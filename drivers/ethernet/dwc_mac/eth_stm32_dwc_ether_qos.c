@@ -31,18 +31,29 @@ LOG_MODULE_REGISTER(dwmac_plat, CONFIG_ETHERNET_LOG_LEVEL);
 #include "eth_dwmac_priv.h"
 #include "eth_stm32_dwc.h"
 
-#if defined(CONFIG_SOC_SERIES_STM32N6X)
-/* The DMA bus master interface is a 64-bit AXI4 interface on this IP */
-#define DATA_BUS_WIDTH 64
+/*
+ * The DMA bus master interface of this IP is a
+ * - 64-bit AXI4 interface on STM32N6 series
+ * - 32-bit AXI4 interface on STM32MP13 series
+ * - 32-bit AHB interface on other series
+ */
 
+#if defined(CONFIG_SOC_SERIES_STM32MP13X) || defined(CONFIG_SOC_SERIES_STM32N6X)
+#define DMA_HAS_AXI4_BUS 1
+#endif
+
+#if defined(CONFIG_SOC_SERIES_STM32N6X)
+#define DATA_BUS_WIDTH 64
+#else
+#define DATA_BUS_WIDTH 32
+#endif
+
+#if defined(DMA_HAS_AXI4_BUS)
 #define ETH_STM32_DMA_SYSBUS_MODE                                                                  \
 	(DMA_SYSBUS_MODE_AAL | DMA_SYSBUS_MODE_FB |                                                \
 	 DMA_SYSBUS_MODE_BLEN16 | DMA_SYSBUS_MODE_BLEN8 | DMA_SYSBUS_MODE_BLEN4 |                  \
 	 FIELD_PREP(DMA_SYSBUS_MODE_RD_OSR_LMT, 3) | FIELD_PREP(DMA_SYSBUS_MODE_WR_OSR_LMT, 3))
 #else
-/* The DMA bus master interface is a 32-bit AHB interface on this IP */
-#define DATA_BUS_WIDTH 32
-
 #define ETH_STM32_DMA_SYSBUS_MODE (DMA_SYSBUS_MODE_AAL | DMA_SYSBUS_MODE_FB)
 #endif
 
@@ -256,14 +267,7 @@ int dwmac_bus_init(const struct device *dev)
 	cfg->select_phy_interface();
 
 	for (size_t n = 0; n < cfg->pclken_cnt; n++) {
-		if (IN_RANGE(cfg->pclken[n].bus, STM32_PERIPH_BUS_MIN, STM32_PERIPH_BUS_MAX)) {
-			ret = clock_control_on(cfg->dwmac.clock,
-					       (clock_control_subsys_t)&cfg->pclken[n]);
-		} else {
-			ret = clock_control_configure(
-				cfg->dwmac.clock, (clock_control_subsys_t)&cfg->pclken[n], NULL);
-		}
-
+		ret = clock_control_on(cfg->dwmac.clock, (clock_control_subsys_t)&cfg->pclken[n]);
 		if (ret != 0) {
 			LOG_ERR("Failed to setup ethernet clock #%zu", n);
 			return -EIO;

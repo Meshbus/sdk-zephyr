@@ -953,6 +953,7 @@ static int dma_stm32_get_status(const struct device *dev,
 	const struct dma_stm32_config *config = dev->config;
 	DMA_TypeDef *dma = (DMA_TypeDef *)(config->base);
 	struct dma_stm32_stream *stream;
+	uint32_t pending_elems;
 
 	/* Give channel from index 0 */
 	id = id - STM32_DMA_STREAM_OFFSET;
@@ -961,9 +962,18 @@ static int dma_stm32_get_status(const struct device *dev,
 	}
 
 	stream = &config->streams[id];
-	stat->pending_length = LL_DMA_GetDataLength(dma, dma_stm32_id_to_stream(id));
 	stat->dir = stream->direction;
 	stat->busy = stream->busy;
+
+	/*
+	 * "Pending length to be transferred in bytes, HW specific"
+	 *
+	 * The DMA keeps track of a number of elements remaining rather than
+	 * an amount of bytes; convert to what the API expects based on the
+	 * source data size: "to be transferred" = "to be read from source".
+	 */
+	pending_elems = LL_DMA_GetDataLength(dma, dma_stm32_id_to_stream(id));
+	stat->pending_length = pending_elems * stream->src_size;
 
 	return 0;
 }
@@ -1074,8 +1084,10 @@ static void dma_stm32_config_irq_0(const struct device *dev)
 	/* All DMAs have at least one IRQ line */
 	DMA_STM32_IRQ_CONNECT(0, 0);
 
-	/* On STM32WB0 series, there is a single IRQ line for all channels */
-#if !defined(CONFIG_SOC_SERIES_STM32WB0X)
+	/* On STM32WB0 and STM32WL3 series, there is a single IRQ line
+	 * for all channels
+	 */
+#if !defined(CONFIG_SOC_SERIES_STM32WB0X) && !defined(CONFIG_SOC_SERIES_STM32WL3X)
 	/* On other series, the sharing follows a pattern:
 	 *	IRQn (X+0) is not shared (assigned to DMA1 channel 1)
 	 *	IRQn (X+1) is shared by DMA1 channels 2 and 3
@@ -1092,7 +1104,7 @@ static void dma_stm32_config_irq_0(const struct device *dev)
 #if DT_INST_IRQ_HAS_IDX(0, 3)
 	DMA_STM32_IRQ_CONNECT(0, 3);
 #endif /* DT_INST_IRQ_HAS_IDX(0, 3) */
-#endif /* !CONFIG_SOC_SERIES_STM32WB0X */
+#endif /* !CONFIG_SOC_SERIES_STM32WB0X && !CONFIG_SOC_SERIES_STM32WL3X */
 #endif /* !CONFIG_DMA_STM32_SHARED_IRQS */
 }
 

@@ -33,6 +33,9 @@ We are pleased to announce the release of Zephyr version 4.5.0.
 
 Major enhancements with this release include:
 
+**Infineon TriCore support**
+  Zephyr now supports the :zephyr:board-catalog:`Infineon TriCore architecture <#arch=tricore>`.
+
 **New driver classes**
 
   Zephyr 4.5 adds several new driver APIs, including:
@@ -218,6 +221,8 @@ Removed APIs and options
 
     * ``CONFIG_NET_TC_SKIP_FOR_HIGH_PRIO``
     * ``CONFIG_NET_SOCKETS_POLL_MAX``
+    * ``CONFIG_NET_TEST_PROTOCOL``, together with the
+      ``samples/net/sockets/tcp`` sample that was its only system under test.
     * ``CONFIG_NET_GPTP_CLOCK_ACCURACY_*``
     * ``net_ipv6_set_hop_limit()``
     * ``net_if_ipv4_get_netmask()``
@@ -294,6 +299,14 @@ Deprecated APIs and options
 
   * The :c:struct:`audio_codec_api` struct has been deprecated. Audio codec drivers are now
     expected to use the :c:macro:`DEVICE_API` macro to declare their driver API.
+
+* Bluetooth
+
+  * The :kconfig:option:`CONFIG_BT_CUSTOM` stack selection has been deprecated. It dates from the
+    time when a whole Bluetooth Host could be offloaded behind the Zephyr Bluetooth API and has no
+    user in the tree; HCI transports are regular device drivers. The HCI-based stack,
+    :kconfig:option:`CONFIG_BT_HCI`, is the only selection left in the tree; the choice itself
+    stays as the extension point for out-of-tree stacks.
 
 * Build system
 
@@ -389,6 +402,12 @@ Deprecated APIs and options
     always available, so the option is no longer required to use ring buffers. It now only serves
     as the deprecated switch that restores the legacy claim/finish and item APIs while out-of-tree
     code migrates to the replacement APIs.
+
+* Network buffers
+
+  * :c:func:`net_buf_max_len` and :c:func:`net_buf_simple_max_len` have been deprecated. Use
+    :c:func:`net_buf_tailroom` and :c:func:`net_buf_simple_tailroom` instead. See the
+    :ref:`migration guide <migration_4.5>` for details.
 
 * Networking
 
@@ -528,6 +547,8 @@ New APIs and options
 
     * :c:func:`bt_conn_take`
     * :c:func:`bt_conn_drop`
+    * :c:func:`bt_id_reset_irk`
+    * :c:macro:`BT_IRK_SIZE`
     * :c:func:`bt_iso_chan_state_str`
     * :c:member:`bt_iso_chan_ops.send_failed`
     * :c:func:`bt_iso_get_chan_by_conn`
@@ -545,6 +566,7 @@ New APIs and options
       :c:func:`bt_hci_pkt_parse_cmd_rsp` and friends) for framing HCI command packets and
       parsing command responses independently of the Host.
     * :c:func:`bt_hci_lockstep_cmd_send_sync`
+    * :c:func:`bt_hci_lockstep_reset`
     * :c:func:`bt_le_bond_addr_res_support`, :c:enum:`bt_le_addr_res_support` and
       :c:member:`bt_conn_auth_info_cb.addr_res_support_read`
     * :c:enumerator:`BT_LE_SCAN_OPT_EXT_FILTER_POLICY`
@@ -590,6 +612,12 @@ New APIs and options
 
   * :c:enumerator:`PIXEL_FORMAT_YUYV`
   * :c:macro:`PANEL_PIXEL_FORMAT_YUYV`
+
+* Fuel Gauge
+
+  * :c:func:`fuel_gauge_set_buffer_prop` and the optional
+    :c:member:`fuel_gauge_driver_api.set_buffer_property` callback for writing variable
+    length buffer properties, symmetric to :c:func:`fuel_gauge_get_buffer_prop`.
 
 * Haptics
 
@@ -667,6 +695,10 @@ New APIs and options
 * Network
 
   * Add :c:func:`net_eth_set_if_type_wifi` to set the ethernet interface type to Wi-Fi.
+  * Add a public neighbor cache API: :c:func:`net_if_ipv4_nbr_flush` and
+    :c:func:`net_if_ipv6_nbr_flush` drop the neighbors an interface has
+    learned, and :c:func:`net_if_ipv4_nbr_rm` and :c:func:`net_if_ipv6_nbr_rm`
+    remove a single one. On an Ethernet link the IPv4 cache is the ARP cache.
   * Add :c:func:`net_dhcpv4_set_reboot_hint` to seed the DHCPv4 client with a
     previously leased address for INIT-REBOOT.
   * Add an mDNS responder interface policy
@@ -725,6 +757,13 @@ New APIs and options
     and :kconfig:option:`CONFIG_NET_SOCKETS_PACKET_MCAST_MEMBERSHIP_COUNT` sets
     how many memberships can be active at the same time.
   * :kconfig:option:`CONFIG_PTP_NETWORK_MODE_HYBRID`
+  * Add an SNTP server (:kconfig:option:`CONFIG_SNTP_SERVER`) that answers time
+    queries on UDP port 123 on every enabled address family. The application
+    sets the system clock and then tells the server about its clock source with
+    :c:func:`sntp_server_clock_source`; until it does, the server tells clients
+    that its time must not be used. The SNTP client is now selected by
+    :kconfig:option:`CONFIG_SNTP` alone, both share
+    :kconfig:option:`CONFIG_SNTP_LIB`.
 
 * Power Management
 
@@ -1224,6 +1263,7 @@ New Drivers
 
 * Clock control
 
+  * :dtcompatible:`aesc,clock-controller` (:github:`116703`)
   * :dtcompatible:`bflb,bl616cl-clock-controller` (:github:`112738`)
   * :dtcompatible:`bflb,bl808-clock-controller` (:github:`105580`)
   * :dtcompatible:`bflb,mm-clk` (:github:`105580`)
@@ -1415,6 +1455,7 @@ New Drivers
   * :dtcompatible:`snps,dwmac-mdio` (:github:`108046`)
   * :dtcompatible:`snps,dwmac-ptp-clock` (:github:`114242`)
   * :dtcompatible:`wch,ch9120` (:github:`111708`)
+  * :dtcompatible:`wiznet,w5100s` (:github:`113315`)
   * :dtcompatible:`wiznet,w6300` (:github:`102727`)
   * :dtcompatible:`xlnx,gem-mdio` (:github:`87313`)
   * :dtcompatible:`zephyr,native-ptp-clock` (:github:`109265`)
@@ -2021,6 +2062,14 @@ Devicetree
 
 Other notable changes
 *********************
+
+* Bluetooth
+
+  * :kconfig:option:`CONFIG_SYSTEM_WORKQUEUE_PRIORITY` is no longer forced to a
+    cooperative priority by :kconfig:option:`CONFIG_BT` alone. Only the components
+    that submit work to the system workqueue require it now, so a build without any
+    of them, such as an HCI raw image driving an external controller, can select a
+    preemptible priority again (:github:`119123`).
 
 * Build system
 

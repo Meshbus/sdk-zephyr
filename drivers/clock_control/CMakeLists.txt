@@ -83,6 +83,7 @@ endif()
 # zephyr-keep-sorted-start
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_ADI_AXI_CLKGEN clock_control_adi_axi_clkgen.c)
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_ADSP clock_control_adsp.c)
+zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_AESC clock_control_aesc.c)
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_AGILEX5 clock_control_agilex5.c)
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_AGILEX5 clock_control_agilex5_ll.c)
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_ALIF clock_control_alif.c)
@@ -183,6 +184,7 @@ zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_SILABS_SIWX91X clock_control_s
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_SMARTBOND clock_control_smartbond.c)
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_SYNA_SR100 clock_control_syna_sr100.c)
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_TISCI clock_control_tisci.c)
+zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_TI_CDCE9XX clock_control_ti_cdce9xx.c)
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_WCH_RCC clock_control_wch_rcc.c)
 zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_XCLK_WIZ clock_control_xclk_wiz.c)
 zephyr_library_sources_ifdef(CONFIG_SOC_SERIES_AGILEX clock_agilex.c)
@@ -193,3 +195,5 @@ if(CONFIG_CLOCK_CONTROL_NRF_COMMON AND NOT CONFIG_HAS_NORDIC_MULTI_OPTION_CLOCKS
   zephyr_linker_sources(SECTIONS clock_control_nrf_irq_handlers.ld)
   zephyr_iterable_section(NAME clock_control_nrf_irq_handler KVMA RAM_REGION GROUP RODATA_REGION)
 endif()
+
+zephyr_library_sources_ifdef(CONFIG_CLOCK_CONTROL_SHELL clock_control_shell.c)

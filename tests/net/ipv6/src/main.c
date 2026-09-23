@@ -255,11 +255,12 @@ static struct k_sem wait_data;
 static bool recv_cb_called;
 struct net_if_addr *ifaddr_record;
 static struct test_ns_handler *ns_handler;
-static int pkt_num;
+static atomic_t pkt_num;
 
 #define WAIT_TIME 250
 #define WAIT_TIME_LONG CONFIG_NET_IPV6_NS_TIMEOUT
-#define WAIT_TIME_NS_TIMEOUT (WAIT_TIME_LONG + WAIT_TIME)
+/* Upper bound for one NS reply timeout to fire, sizes polling budgets. */
+#define WAIT_TIME_NS_TIMEOUT (WAIT_TIME_LONG + WAIT_TIME_LONG / 2)
 #define SENDING 93244
 #define MY_PORT 1969
 #define PEER_PORT 16233
@@ -481,7 +482,7 @@ static int tester_send(const struct device *dev, struct net_pkt *pkt)
 
 	icmp = get_icmp_hdr(pkt);
 
-	pkt_num++;
+	atomic_inc(&pkt_num);
 
 	/* Reply with RA message */
 	if (icmp->type == NET_ICMPV6_RS) {
@@ -856,9 +857,9 @@ ZTEST(net_ipv6, test_send_ns_extra_options)
 	iface = TEST_NET_IF;
 
 	pkt = net_pkt_alloc_with_buffer(iface, sizeof(icmpv6_ns_invalid),
-					NET_AF_UNSPEC, 0, K_FOREVER);
+					NET_AF_UNSPEC, 0, K_MSEC(WAIT_TIME));
 
-	NET_ASSERT(pkt, "Out of TX packets");
+	zassert_not_null(pkt, "Out of TX packets");
 
 	net_pkt_write(pkt, icmpv6_ns_invalid, sizeof(icmpv6_ns_invalid));
 	net_pkt_lladdr_clear(pkt);
@@ -879,9 +880,9 @@ ZTEST(net_ipv6, test_send_ns_no_options)
 	iface = TEST_NET_IF;
 
 	pkt = net_pkt_alloc_with_buffer(iface, sizeof(icmpv6_ns_no_sllao),
-					NET_AF_UNSPEC, 0, K_FOREVER);
+					NET_AF_UNSPEC, 0, K_MSEC(WAIT_TIME));
 
-	NET_ASSERT(pkt, "Out of TX packets");
+	zassert_not_null(pkt, "Out of TX packets");
 
 	net_pkt_write(pkt, icmpv6_ns_no_sllao, sizeof(icmpv6_ns_no_sllao));
 	net_pkt_lladdr_clear(pkt);
@@ -932,9 +933,9 @@ ZTEST_P(net_ipv6, test_ipv6_ext_hdr_len_bounds)
 	struct net_pkt *pkt;
 	struct net_if *iface = TEST_NET_IF;
 
-	pkt = net_pkt_alloc_with_buffer(iface, tc->len, NET_AF_INET6, 0, K_FOREVER);
+	pkt = net_pkt_alloc_with_buffer(iface, tc->len, NET_AF_INET6, 0, K_MSEC(WAIT_TIME));
 
-	NET_ASSERT(pkt, "Out of TX packets");
+	zassert_not_null(pkt, "Out of TX packets");
 
 	zassert_ok(net_pkt_write(pkt, tc->data, tc->len), "Failed to write packet");
 	net_pkt_cursor_init(pkt);
@@ -986,6 +987,39 @@ static void expect_nd_ns(struct net_pkt *pkt, void *user_data)
 	}
 }
 
+/* Poll a packet counter until it reaches the expected value. Returns false
+ * on timeout or if the counter went past it.
+ */
+static bool wait_for_count(atomic_t *count, int expected, int32_t timeout_ms)
+{
+	int64_t end = k_uptime_get() + timeout_ms;
+
+	while (k_uptime_get() <= end) {
+		if (atomic_get(count) >= expected) {
+			return atomic_get(count) == expected;
+		}
+
+		k_sleep(K_MSEC(10));
+	}
+
+	return false;
+}
+
+static bool wait_for_pending_queue_empty(struct net_nbr *nbr, int32_t timeout_ms)
+{
+	int64_t end = k_uptime_get() + timeout_ms;
+
+	while (k_uptime_get() <= end) {
+		if (k_fifo_is_empty(&net_ipv6_nbr_data(nbr)->pending_queue)) {
+			return true;
+		}
+
+		k_sleep(K_MSEC(10));
+	}
+
+	return false;
+}
+
 extern int net_ipv6_nbr_test_cancel(void);
 
 ZTEST(net_ipv6, test_send_neighbor_discovery)
@@ -1014,7 +1048,7 @@ ZTEST(net_ipv6, test_send_neighbor_discovery)
 	(void)net_ipv6_nbr_rm(TEST_NET_IF, &test_router_addr);
 
 	/* Make sure we can queue two packets */
-	pkt_num = 0;
+	atomic_clear(&pkt_num);
 
 	avail_buf_count = atomic_get(&tx_data->avail_count);
 	avail_pkt_count = k_mem_slab_num_free_get(tx);
@@ -1027,7 +1061,8 @@ ZTEST(net_ipv6, test_send_neighbor_discovery)
 	zassert_equal(verdict, NET_OK, "Packet was dropped (%d)", verdict);
 
 	/* At this point we should have sent one NS and queued one packet. */
-	zassert_equal(pkt_num, 1, "Unexpected number of packets sent (%d)", pkt_num);
+	zassert_equal(atomic_get(&pkt_num), 1, "Unexpected number of packets sent (%ld)",
+		      atomic_get(&pkt_num));
 
 	zassert_ok(k_sem_take(&ctx.wait_ns, K_MSEC(WAIT_TIME)),
 		   "Timeout while waiting for expected NS");
@@ -1042,7 +1077,8 @@ ZTEST(net_ipv6, test_send_neighbor_discovery)
 	/* Packet count should now be 3, one for the first NS and two
 	 * for the queued packets.
 	 */
-	zassert_equal(pkt_num, 3, "Unexpected number of packets sent (%d)", pkt_num);
+	zassert_equal(atomic_get(&pkt_num), 3, "Unexpected number of packets sent (%ld)",
+		      atomic_get(&pkt_num));
 
 	/* Third attempt (neighbor valid) should give no NS. */
 	verdict = send_msg(&my_addr, &test_router_addr);
@@ -1051,7 +1087,8 @@ ZTEST(net_ipv6, test_send_neighbor_discovery)
 		      "Should not get NS");
 
 	/* Packet count should be 4 as we sent one more packet. */
-	zassert_equal(pkt_num, 4, "Unexpected number of packets sent (%d)", pkt_num);
+	zassert_equal(atomic_get(&pkt_num), 4, "Unexpected number of packets sent (%ld)",
+		      atomic_get(&pkt_num));
 
 	/* If there are anything pending by the NS reply timer, then
 	 * 1 is returned. A pending timer does not imply that a TX packet or
@@ -1071,19 +1108,13 @@ ZTEST(net_ipv6, test_send_neighbor_discovery)
 
 ZTEST(net_ipv6, test_send_neighbor_discovery_timeout)
 {
-	static struct test_nd_context ctx = {
-		.exp_ns_addr = &test_router_addr,
-		.reply = true
-	};
 	enum net_verdict verdict;
 	struct net_nbr *nbr;
-
-	k_sem_init(&ctx.wait_ns, 0, 1);
 
 	(void)net_ipv6_nbr_rm(TEST_NET_IF, &test_router_addr);
 
 	/* Make sure we can queue two packets */
-	pkt_num = 0;
+	atomic_clear(&pkt_num);
 
 	verdict = send_msg(&my_addr, &test_router_addr);
 	zassert_equal(verdict, NET_OK, "Packet was dropped (%d)", verdict);
@@ -1093,22 +1124,425 @@ ZTEST(net_ipv6, test_send_neighbor_discovery_timeout)
 	zassert_equal(verdict, NET_OK, "Packet was dropped (%d)", verdict);
 
 	/* At this point we should have sent one NS and queued one packet. */
-	zassert_equal(pkt_num, 1, "Unexpected number of packets sent (%d)", pkt_num);
+	zassert_equal(atomic_get(&pkt_num), 1, "Unexpected number of packets sent (%ld)",
+		      atomic_get(&pkt_num));
 
-	k_sleep(K_MSEC(10));
-
-	zassert_not_ok(k_sem_take(&ctx.wait_ns, K_MSEC(WAIT_TIME_NS_TIMEOUT)),
-		       "Timeout while waiting for expected NS");
+	/* The NS reply timeout drops one packet and sends a new NS for the
+	 * other one, so the packet count reaches 2.
+	 */
+	zassert_true(wait_for_count(&pkt_num, 2, 2 * WAIT_TIME_LONG),
+		     "Unexpected number of packets sent (%ld)", atomic_get(&pkt_num));
 
 	nbr = net_ipv6_nbr_lookup(TEST_NET_IF, &test_router_addr);
 	zassert_not_null(nbr, "Neighbor not found.");
 
-	/* Packet count should be 2, one for the first NS and second for the
-	 * timeouted NS packet.
+	(void)net_ipv6_nbr_rm(TEST_NET_IF, &test_router_addr);
+}
+
+struct test_nd_count_context {
+	struct net_in6_addr *exp_ns_addr;
+	atomic_t ns_count;
+};
+
+static void count_nd_ns(struct net_pkt *pkt, void *user_data)
+{
+	struct test_nd_count_context *ctx = user_data;
+	struct net_in6_addr target;
+	uint32_t res_bytes;
+
+	skip_headers(pkt);
+
+	zassert_ok(net_pkt_read_be32(pkt, &res_bytes), "Failed to read reserved bytes");
+	zassert_ok(net_pkt_read(pkt, &target, sizeof(struct net_in6_addr)),
+		   "Failed to read target address");
+
+	if (net_ipv6_addr_cmp(ctx->exp_ns_addr, &target)) {
+		atomic_inc(&ctx->ns_count);
+	}
+}
+
+struct tx_pool_snapshot {
+	int pkts;
+	int bufs;
+};
+
+static void tx_pool_snapshot(struct tx_pool_snapshot *snap)
+{
+	struct k_mem_slab *tx;
+	struct net_buf_pool *tx_data;
+
+	net_pkt_get_info(NULL, &tx, NULL, &tx_data);
+
+	snap->pkts = (int)k_mem_slab_num_free_get(tx);
+	snap->bufs = (int)atomic_get(&tx_data->avail_count);
+}
+
+static void assert_tx_pool_restored(const struct tx_pool_snapshot *before)
+{
+	struct tx_pool_snapshot now;
+
+	/* Let the TX thread release what it has already sent. */
+	k_sleep(K_MSEC(WAIT_TIME));
+
+	tx_pool_snapshot(&now);
+
+	zassert_equal(now.pkts, before->pkts, "TX packet pool leaked %d packet(s) (%d vs %d)",
+		      before->pkts - now.pkts, now.pkts, before->pkts);
+	zassert_equal(now.bufs, before->bufs, "TX data pool leaked %d buffer(s) (%d vs %d)",
+		      before->bufs - now.bufs, now.bufs, before->bufs);
+}
+
+static bool wait_for_nbr_removed(struct net_if *iface, const struct net_in6_addr *addr,
+				 int32_t timeout_ms)
+{
+	int64_t end = k_uptime_get() + timeout_ms;
+
+	while (k_uptime_get() <= end) {
+		if (net_ipv6_nbr_lookup(iface, addr) == NULL) {
+			return true;
+		}
+
+		k_sleep(K_MSEC(10));
+	}
+
+	return false;
+}
+
+/* Queue packets toward a neighbor that never answers. The first one
+ * triggers the NS, the rest are appended to the pending queue.
+ */
+static void queue_pkts_to_unresolved_nbr(int count)
+{
+	int ret;
+
+	for (int i = 0; i < count; i++) {
+		ret = send_msg(&my_addr, &test_router_addr);
+		zassert_equal(ret, 0, "Packet %d was dropped (%d)", i, ret);
+	}
+
+	k_sleep(K_MSEC(10));
+}
+
+static void inject_ra_message(struct net_if *iface)
+{
+	struct net_eth_hdr hdr;
+	struct net_pkt *pkt;
+
+	pkt = net_pkt_rx_alloc_with_buffer(iface, sizeof(hdr) + sizeof(icmpv6_ra),
+					   NET_AF_UNSPEC, 0, K_NO_WAIT);
+	zassert_not_null(pkt, "Failed to allocate RA packet");
+
+	hdr.type = net_htons(NET_ETH_PTYPE_IPV6);
+	memset(&hdr.src, 0, sizeof(struct net_eth_addr));
+	memcpy(&hdr.dst, net_if_get_link_addr(iface)->addr, sizeof(struct net_eth_addr));
+
+	net_pkt_cursor_init(pkt);
+	net_pkt_set_overwrite(pkt, false);
+
+	zassert_ok(net_pkt_write(pkt, &hdr, sizeof(hdr)));
+	zassert_ok(net_pkt_write(pkt, icmpv6_ra, sizeof(icmpv6_ra)));
+
+	net_pkt_cursor_init(pkt);
+	zassert_ok(net_recv_data(iface, pkt), "Data receive for RA failed.");
+}
+
+static void inject_ra_no_sllao(struct net_if *iface)
+{
+	/* RA header followed by an MTU option, as the RA handler requires at
+	 * least one option. The MTU value shows the RA was processed.
 	 */
-	zassert_equal(pkt_num, 2, "Unexpected number of packets sent (%d)", pkt_num);
+	static const uint8_t ra_hdr[] = { 0x40, 0x00, 0x07, 0x08, 0x00, 0x00,
+					  0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					  0x05, 0x01, 0x00, 0x00, 0x00, 0x00,
+					  0x05, 0x78 };
+	struct net_eth_hdr hdr;
+	struct net_pkt *pkt;
+
+	pkt = net_pkt_alloc_with_buffer(iface, TEST_MSG_SIZE, NET_AF_INET6,
+					NET_IPPROTO_ICMPV6, K_NO_WAIT);
+	zassert_not_null(pkt, "Failed to allocate RA packet");
+
+	net_pkt_set_ipv6_hop_limit(pkt, NET_IPV6_ND_HOP_LIMIT);
+
+	hdr.type = net_htons(NET_ETH_PTYPE_IPV6);
+	memset(&hdr.src, 0xaa, sizeof(struct net_eth_addr));
+	memcpy(&hdr.dst, net_if_get_link_addr(iface)->addr, sizeof(struct net_eth_addr));
+
+	net_buf_reserve(pkt->frags, sizeof(struct net_eth_hdr));
+	net_pkt_cursor_init(pkt);
+	net_pkt_set_overwrite(pkt, false);
+
+	zassert_ok(net_ipv6_create(pkt, &test_router_addr, &all_nodes_mcast));
+	zassert_ok(net_icmpv6_create(pkt, NET_ICMPV6_RA, 0));
+	zassert_ok(net_pkt_write(pkt, ra_hdr, sizeof(ra_hdr)));
+
+	net_pkt_cursor_init(pkt);
+	net_ipv6_finalize(pkt, NET_IPPROTO_ICMPV6);
+
+	net_buf_push_mem(pkt->frags, &hdr, sizeof(struct net_eth_hdr));
+
+	net_pkt_cursor_init(pkt);
+	zassert_ok(net_recv_data(iface, pkt), "Data receive for RA failed.");
+}
+
+/* Two queued packets, no NA: the first NS timeout drops one packet and
+ * re-solicits for the other, the second timeout drops it and frees the
+ * neighbor. Nothing may stay allocated after that.
+ */
+ZTEST(net_ipv6, test_send_neighbor_discovery_timeout_one_pending)
+{
+	static struct test_nd_count_context ctx = {
+		.exp_ns_addr = &test_router_addr,
+	};
+	static struct test_ns_handler handler = {
+		.fn = count_nd_ns,
+		.user_data = &ctx
+	};
+	struct tx_pool_snapshot before;
 
 	(void)net_ipv6_nbr_rm(TEST_NET_IF, &test_router_addr);
+	k_sleep(K_MSEC(10));
+
+	atomic_clear(&ctx.ns_count);
+	ns_handler = &handler;
+
+	tx_pool_snapshot(&before);
+
+	queue_pkts_to_unresolved_nbr(2);
+	zassert_equal(atomic_get(&ctx.ns_count), 1, "Unexpected number of NS sent (%ld)",
+		      atomic_get(&ctx.ns_count));
+
+	zassert_true(wait_for_nbr_removed(TEST_NET_IF, &test_router_addr,
+					  3 * WAIT_TIME_NS_TIMEOUT),
+		     "Neighbor was not removed after NS timeouts");
+
+	zassert_equal(atomic_get(&ctx.ns_count), 2, "Unexpected number of NS sent (%ld)",
+		      atomic_get(&ctx.ns_count));
+
+	assert_tx_pool_restored(&before);
+}
+
+/* Three queued packets, no NA: every NS timeout drops one packet and sends
+ * a new NS for the rest, until the last one goes and the neighbor is freed.
+ */
+ZTEST(net_ipv6, test_send_neighbor_discovery_timeout_many_pending)
+{
+	static struct test_nd_count_context ctx = {
+		.exp_ns_addr = &test_router_addr,
+	};
+	static struct test_ns_handler handler = {
+		.fn = count_nd_ns,
+		.user_data = &ctx
+	};
+	struct tx_pool_snapshot before;
+	struct net_nbr *nbr;
+
+	(void)net_ipv6_nbr_rm(TEST_NET_IF, &test_router_addr);
+	k_sleep(K_MSEC(10));
+
+	atomic_clear(&ctx.ns_count);
+	ns_handler = &handler;
+
+	tx_pool_snapshot(&before);
+
+	queue_pkts_to_unresolved_nbr(3);
+	zassert_equal(atomic_get(&ctx.ns_count), 1, "Unexpected number of NS sent (%ld)",
+		      atomic_get(&ctx.ns_count));
+
+	/* First timeout: one packet dropped, two left, a new NS expected. */
+	zassert_true(wait_for_count(&ctx.ns_count, 2, 2 * WAIT_TIME_LONG),
+		     "No NS sent after timeout with packets queued (%ld)",
+		     atomic_get(&ctx.ns_count));
+
+	nbr = net_ipv6_nbr_lookup(TEST_NET_IF, &test_router_addr);
+	zassert_not_null(nbr, "Neighbor not found.");
+	zassert_false(k_fifo_is_empty(&net_ipv6_nbr_data(nbr)->pending_queue),
+		      "Pending queue should not be empty yet");
+	zassert_not_equal(net_ipv6_nbr_data(nbr)->send_ns, 0,
+			  "NS timeout not armed although packets are queued");
+
+	zassert_true(wait_for_nbr_removed(TEST_NET_IF, &test_router_addr,
+					  3 * WAIT_TIME_NS_TIMEOUT),
+		     "Neighbor was not removed after NS timeouts");
+
+	zassert_equal(atomic_get(&ctx.ns_count), 3, "Unexpected number of NS sent (%ld)",
+		      atomic_get(&ctx.ns_count));
+
+	assert_tx_pool_restored(&before);
+}
+
+/* The neighbor gets a link address while packets are queued, without an
+ * NA. The NS reply timeout then sends the queued packets instead of
+ * dropping them.
+ */
+ZTEST(net_ipv6, test_send_neighbor_discovery_timeout_resolved)
+{
+	static struct test_nd_count_context ctx = {
+		.exp_ns_addr = &test_router_addr,
+	};
+	static struct test_ns_handler handler = {
+		.fn = count_nd_ns,
+		.user_data = &ctx
+	};
+	static const uint8_t mac[] = { 0x00, 0x60, 0x97, 0x07, 0x69, 0xea };
+	struct tx_pool_snapshot before;
+	struct net_linkaddr lladdr;
+	struct net_nbr *nbr;
+
+	(void)net_ipv6_nbr_rm(TEST_NET_IF, &test_router_addr);
+	k_sleep(K_MSEC(10));
+
+	atomic_clear(&ctx.ns_count);
+	ns_handler = &handler;
+	atomic_clear(&pkt_num);
+
+	tx_pool_snapshot(&before);
+
+	queue_pkts_to_unresolved_nbr(2);
+	zassert_equal(atomic_get(&ctx.ns_count), 1, "Unexpected number of NS sent (%ld)",
+		      atomic_get(&ctx.ns_count));
+
+	zassert_ok(net_linkaddr_set(&lladdr, mac, sizeof(mac)));
+
+	nbr = net_ipv6_nbr_add(TEST_NET_IF, &test_router_addr, &lladdr, false,
+			       NET_IPV6_NBR_STATE_STALE);
+	zassert_not_null(nbr, "Neighbor not found.");
+	zassert_not_equal(nbr->idx, NET_NBR_LLADDR_UNKNOWN, "Link address not set");
+
+	/* The NS reply timeout sends the queued packets. */
+	zassert_true(wait_for_pending_queue_empty(nbr, 2 * WAIT_TIME_LONG),
+		     "Pending queue not drained");
+
+	nbr = net_ipv6_nbr_lookup(TEST_NET_IF, &test_router_addr);
+	zassert_not_null(nbr, "Neighbor not found.");
+
+	/* Everything but the NS packets must have gone out. */
+	zassert_equal(atomic_get(&pkt_num) - atomic_get(&ctx.ns_count), 2,
+		      "Pending packets not sent (%ld)",
+		      atomic_get(&pkt_num) - atomic_get(&ctx.ns_count));
+
+	assert_tx_pool_restored(&before);
+
+	(void)net_ipv6_nbr_rm(TEST_NET_IF, &test_router_addr);
+}
+
+/* An RA from the neighbor resolves it. Pending packets are sent from the
+ * RA handler and must be released once sent.
+ */
+ZTEST(net_ipv6, test_send_neighbor_discovery_ra_drain)
+{
+	static struct test_nd_count_context ctx = {
+		.exp_ns_addr = &test_router_addr,
+	};
+	static struct test_ns_handler handler = {
+		.fn = count_nd_ns,
+		.user_data = &ctx
+	};
+	struct tx_pool_snapshot before;
+	struct net_nbr *nbr;
+
+	(void)net_ipv6_nbr_rm(TEST_NET_IF, &test_router_addr);
+	k_sleep(K_MSEC(10));
+
+	atomic_clear(&ctx.ns_count);
+	ns_handler = &handler;
+
+	tx_pool_snapshot(&before);
+
+	queue_pkts_to_unresolved_nbr(2);
+	zassert_equal(atomic_get(&ctx.ns_count), 1, "Unexpected number of NS sent (%ld)",
+		      atomic_get(&ctx.ns_count));
+
+	inject_ra_message(TEST_NET_IF);
+	k_sleep(K_MSEC(WAIT_TIME));
+
+	nbr = net_ipv6_nbr_lookup(TEST_NET_IF, &test_router_addr);
+	zassert_not_null(nbr, "Neighbor not found.");
+	zassert_not_equal(nbr->idx, NET_NBR_LLADDR_UNKNOWN, "Link address not set");
+	zassert_true(k_fifo_is_empty(&net_ipv6_nbr_data(nbr)->pending_queue),
+		     "Pending queue not drained");
+
+	assert_tx_pool_restored(&before);
+
+	(void)net_ipv6_nbr_rm(TEST_NET_IF, &test_router_addr);
+}
+
+/* An RA without SLLAO does not resolve the neighbor. The pending packets
+ * stay queued for the NS reply timeout instead of being sent.
+ */
+ZTEST(net_ipv6, test_send_neighbor_discovery_ra_no_sllao)
+{
+	static struct test_nd_count_context ctx = {
+		.exp_ns_addr = &test_router_addr,
+	};
+	static struct test_ns_handler handler = {
+		.fn = count_nd_ns,
+		.user_data = &ctx
+	};
+	struct tx_pool_snapshot before;
+	struct net_nbr *nbr;
+	uint16_t mtu;
+
+	(void)net_ipv6_nbr_rm(TEST_NET_IF, &test_router_addr);
+	k_sleep(K_MSEC(10));
+
+	atomic_clear(&ctx.ns_count);
+	ns_handler = &handler;
+	mtu = net_if_get_mtu(TEST_NET_IF);
+
+	tx_pool_snapshot(&before);
+
+	queue_pkts_to_unresolved_nbr(2);
+	zassert_equal(atomic_get(&ctx.ns_count), 1, "Unexpected number of NS sent (%ld)",
+		      atomic_get(&ctx.ns_count));
+
+	inject_ra_no_sllao(TEST_NET_IF);
+	k_sleep(K_MSEC(WAIT_TIME));
+
+	zassert_equal(net_if_get_mtu(TEST_NET_IF), 1400, "RA was not processed");
+	net_if_set_mtu(TEST_NET_IF, mtu);
+
+	nbr = net_ipv6_nbr_lookup(TEST_NET_IF, &test_router_addr);
+	zassert_not_null(nbr, "Neighbor not found.");
+	zassert_equal(nbr->idx, NET_NBR_LLADDR_UNKNOWN, "Link address set without SLLAO");
+	zassert_false(k_fifo_is_empty(&net_ipv6_nbr_data(nbr)->pending_queue),
+		      "Pending packets sent to unresolved neighbor");
+
+	zassert_true(wait_for_nbr_removed(TEST_NET_IF, &test_router_addr,
+					  3 * WAIT_TIME_NS_TIMEOUT),
+		     "Neighbor was not removed after NS timeouts");
+
+	assert_tx_pool_restored(&before);
+}
+
+/* Removing a neighbor with packets still queued must release them. */
+ZTEST(net_ipv6, test_send_neighbor_discovery_nbr_rm_pending)
+{
+	static struct test_nd_count_context ctx = {
+		.exp_ns_addr = &test_router_addr,
+	};
+	static struct test_ns_handler handler = {
+		.fn = count_nd_ns,
+		.user_data = &ctx
+	};
+	struct tx_pool_snapshot before;
+
+	(void)net_ipv6_nbr_rm(TEST_NET_IF, &test_router_addr);
+	k_sleep(K_MSEC(10));
+
+	atomic_clear(&ctx.ns_count);
+	ns_handler = &handler;
+
+	tx_pool_snapshot(&before);
+
+	queue_pkts_to_unresolved_nbr(2);
+	zassert_equal(atomic_get(&ctx.ns_count), 1, "Unexpected number of NS sent (%ld)",
+		      atomic_get(&ctx.ns_count));
+
+	zassert_true(net_ipv6_nbr_rm(TEST_NET_IF, &test_router_addr),
+		     "Neighbor not found.");
+
+	assert_tx_pool_restored(&before);
 }
 
 /**
@@ -1208,6 +1642,11 @@ static void ra_message(void)
 	zassert_false(!net_if_ipv6_router_lookup(TEST_NET_IF, &test_router_addr),
 		      "Router %s should be here\n",
 		      net_sprint_ipv6_addr(&test_router_addr));
+
+	/* The Retrans Timer field of icmpv6_ra[] is 0x00000101 ms. */
+	zexpect_equal(net_if_ipv6_get_retrans_timer(TEST_NET_IF), 0x101U,
+		      "Wrong retransmit timer %u",
+		      net_if_ipv6_get_retrans_timer(TEST_NET_IF));
 
 	/* Check if autoconf address was added correctly. */
 	ifaddr = net_if_ipv6_addr_lookup_by_iface(TEST_NET_IF,
@@ -1426,9 +1865,9 @@ ZTEST(net_ipv6, test_hbho_message)
 	iface = TEST_NET_IF;
 
 	pkt = net_pkt_alloc_with_buffer(iface, sizeof(ipv6_hbho),
-					NET_AF_UNSPEC, 0, K_FOREVER);
+					NET_AF_UNSPEC, 0, K_MSEC(WAIT_TIME));
 
-	NET_ASSERT(pkt, "Out of TX packets");
+	zassert_not_null(pkt, "Out of TX packets");
 
 	net_pkt_write(pkt, ipv6_hbho, sizeof(ipv6_hbho));
 	net_pkt_lladdr_clear(pkt);
@@ -1477,9 +1916,9 @@ ZTEST(net_ipv6, test_hbho_message_1)
 	iface = TEST_NET_IF;
 
 	pkt = net_pkt_alloc_with_buffer(iface, sizeof(ipv6_hbho_1),
-					NET_AF_UNSPEC, 0, K_FOREVER);
+					NET_AF_UNSPEC, 0, K_MSEC(WAIT_TIME));
 
-	NET_ASSERT(pkt, "Out of TX packets");
+	zassert_not_null(pkt, "Out of TX packets");
 
 	net_pkt_write(pkt, ipv6_hbho_1, sizeof(ipv6_hbho_1));
 
@@ -1537,9 +1976,9 @@ ZTEST(net_ipv6, test_hbho_message_2)
 	iface = TEST_NET_IF;
 
 	pkt = net_pkt_alloc_with_buffer(iface, sizeof(ipv6_hbho_2),
-					NET_AF_UNSPEC, 0, K_FOREVER);
+					NET_AF_UNSPEC, 0, K_MSEC(WAIT_TIME));
 
-	NET_ASSERT(pkt, "Out of TX packets");
+	zassert_not_null(pkt, "Out of TX packets");
 
 
 	net_pkt_write(pkt, ipv6_hbho_2, sizeof(ipv6_hbho_2));
@@ -1700,9 +2139,9 @@ ZTEST(net_ipv6, test_hbho_message_3)
 	iface = TEST_NET_IF;
 
 	pkt = net_pkt_alloc_with_buffer(iface, sizeof(ipv6_hbho_3),
-					NET_AF_UNSPEC, 0, K_FOREVER);
+					NET_AF_UNSPEC, 0, K_MSEC(WAIT_TIME));
 
-	NET_ASSERT(pkt, "Out of TX packets");
+	zassert_not_null(pkt, "Out of TX packets");
 
 	net_pkt_write(pkt, ipv6_hbho_3, sizeof(ipv6_hbho_3));
 	net_pkt_lladdr_clear(pkt);
@@ -2063,10 +2502,8 @@ static struct net_pkt *setup_ipv6_udp(struct net_if *iface,
 	struct net_pkt *pkt;
 
 	pkt = net_pkt_alloc_with_buffer(iface, strlen(payload),
-					NET_AF_INET6, NET_IPPROTO_UDP, K_FOREVER);
-	if (!pkt) {
-		return NULL;
-	}
+					NET_AF_INET6, NET_IPPROTO_UDP, K_MSEC(WAIT_TIME));
+	zassert_not_null(pkt, "Out of TX packets");
 
 	if (net_ipv6_create(pkt, local_addr, remote_addr)) {
 		printk("Cannot create IPv6  pkt %p", pkt);
@@ -2975,7 +3412,7 @@ ZTEST(net_ipv6, test_z_privacy_extension_03_get_addr)
 	}
 }
 
-static void inject_bad_nd_message(struct net_if *iface, const uint8_t *data, size_t len)
+static void inject_nd_message(struct net_if *iface, const uint8_t *data, size_t len)
 {
 	struct net_eth_hdr hdr;
 	struct net_pkt *pkt;
@@ -3012,7 +3449,7 @@ static void test_nd_packet_drop(const uint8_t *data, size_t len)
 			    sizeof(ipv6_nd_before)),
 		   "Failed to retrieve stats");
 
-	inject_bad_nd_message(iface, data, len);
+	inject_nd_message(iface, data, len);
 
 	for (int i = 0; i < 20; i++) {
 		/* Give the packet some time to propagate into the stack. */
@@ -3029,6 +3466,35 @@ static void test_nd_packet_drop(const uint8_t *data, size_t len)
 
 	zassert_equal(ipv6_nd_before.drop + 1, ipv6_nd_after.drop,
 		      "ND packet drop count did not increase");
+}
+
+static void test_nd_packet_accept(const uint8_t *data, size_t len)
+{
+	struct net_stats_ipv6_nd ipv6_nd_before = {0};
+	struct net_stats_ipv6_nd ipv6_nd_after = {0};
+	struct net_if *iface = TEST_NET_IF;
+
+	zassert_ok(net_mgmt(NET_REQUEST_STATS_GET_IPV6_ND, NULL, &ipv6_nd_before,
+			    sizeof(ipv6_nd_before)),
+		   "Failed to retrieve stats");
+
+	inject_nd_message(iface, data, len);
+
+	for (int i = 0; i < 20; i++) {
+		/* Give the packet some time to propagate into the stack. */
+		k_msleep(10);
+
+		zassert_ok(net_mgmt(NET_REQUEST_STATS_GET_IPV6_ND, NULL, &ipv6_nd_after,
+				    sizeof(ipv6_nd_after)),
+			   "Failed to retrieve stats");
+
+		if (ipv6_nd_before.recv < ipv6_nd_after.recv) {
+			break;
+		}
+	}
+
+	zassert_equal(ipv6_nd_before.recv + 1, ipv6_nd_after.recv, "ND packet was not received");
+	zassert_equal(ipv6_nd_before.drop, ipv6_nd_after.drop, "ND packet was dropped");
 }
 
 /* Minimal ICMPv6 RA with bad hop limit */
@@ -3100,6 +3566,75 @@ ZTEST(net_ipv6, test_na_with_bad_hop_limit)
 	 * which should be dropped.
 	 */
 	test_nd_packet_drop(icmpv6_na_bad_hop_limit, sizeof(icmpv6_na_bad_hop_limit));
+}
+
+/* RA carrying only the fixed header, RFC 4861 section 6.1.2 minimum length. */
+static const unsigned char icmpv6_ra_no_options[] = {
+/* IPv6 header starts here */
+	0x60, 0x00, 0x00, 0x00, 0x00, 0x10, 0x3a, 0xff,
+	0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x02, 0x60, 0x97, 0xff, 0xfe, 0x07, 0x69, 0xea,
+	0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+/* ICMPv6 RA header starts here */
+	0x86, 0x00, 0x72, 0xd6, 0x00, 0x00, 0x07, 0x08,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+ZTEST(net_ipv6, test_ra_no_options)
+{
+	struct net_if *iface = TEST_NET_IF;
+	struct net_if_router *router;
+	bool had_router;
+
+	had_router = net_if_ipv6_router_lookup(iface, &test_router_addr) != NULL;
+
+	test_nd_packet_accept(icmpv6_ra_no_options, sizeof(icmpv6_ra_no_options));
+
+	router = net_if_ipv6_router_lookup(iface, &test_router_addr);
+	zassert_not_null(router, "Router not added from RA without options");
+
+	if (!had_router) {
+		net_if_ipv6_router_rm(router);
+		(void)net_ipv6_nbr_rm(iface, &test_router_addr);
+	}
+}
+
+/* Solicited NA carrying only the fixed header, RFC 4861 section 7.1.2 minimum
+ * length. The Target Link-Layer Address option may be omitted when replying to
+ * a unicast NS (section 4.4).
+ */
+static const unsigned char icmpv6_na_no_options[] = {
+/* IPv6 header starts here */
+	0x60, 0x00, 0x00, 0x00, 0x00, 0x18, 0x3a, 0xff,
+	0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+	0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+/* ICMPv6 NA header starts here, solicited flag set */
+	0x88, 0x00, 0xae, 0x7c, 0x40, 0x00, 0x00, 0x00,
+/* Target Address */
+	0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+};
+
+ZTEST(net_ipv6, test_na_no_options)
+{
+	struct net_nbr *nbr;
+
+	add_neighbor();
+
+	nbr = net_ipv6_nbr_lookup(TEST_NET_IF, &peer_addr);
+	zassert_not_null(nbr, "Neighbor %s not found in cache\n", net_sprint_ipv6_addr(&peer_addr));
+
+	net_ipv6_nbr_data(nbr)->state = NET_IPV6_NBR_STATE_STALE;
+
+	test_nd_packet_accept(icmpv6_na_no_options, sizeof(icmpv6_na_no_options));
+
+	zassert_equal(net_ipv6_nbr_data(nbr)->state, NET_IPV6_NBR_STATE_REACHABLE,
+		      "Solicited NA without options did not confirm reachability");
+
+	rm_neighbor();
 }
 
 /* A malicious Router Advertisement can carry a tiny Reachable Time. Verify the

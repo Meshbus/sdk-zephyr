@@ -1509,6 +1509,14 @@ static int spi_stm32_configure(const struct device *dev,
 	}
 #endif
 
+#if DT_HAS_COMPAT_STATUS_OKAY(st_stm32h7_spi)
+	if (cfg->gpio_control) {
+		LL_SPI_EnableGPIOControl(cfg->spi);
+	} else {
+		LL_SPI_DisableGPIOControl(cfg->spi);
+	}
+#endif /* DT_HAS_COMPAT_STATUS_OKAY(st_stm32h7_spi) */
+
 	if (SPI_MODE_GET(config->operation) & SPI_MODE_CPOL) {
 		LL_SPI_SetClockPolarity(spi, STM32_SPI_CLOCK_POLARITY_HIGH);
 	} else {
@@ -2331,32 +2339,32 @@ static int spi_stm32_init(const struct device *dev)
 #endif /* CONFIG_SPI_STM32_INTERRUPT */
 
 #define SPI_DMA_CHANNEL_INIT(index, dir, dir_cap, src_dev, dest_dev)		\
-	.dma_dev = DEVICE_DT_GET(STM32_DMA_CTLR(index, dir)),			\
+	.dma_dev = DEVICE_DT_GET(STM32_DT_INST_DMA_CTLR(index, dir)),		\
 	.channel = DT_INST_DMAS_CELL_BY_NAME(index, dir, channel),		\
 	.dma_cfg = {								\
-		.dma_slot = STM32_DMA_SLOT(index, dir, slot),			\
+		.dma_slot = STM32_DT_INST_DMA_SLOT(index, dir),			\
 		.channel_direction = STM32_DMA_CONFIG_DIRECTION(		\
-					STM32_DMA_CHANNEL_CONFIG(index, dir)),	\
+			STM32_DT_INST_DMA_CHANNEL_CONFIG(index, dir)),		\
 		.source_data_size = STM32_DMA_CONFIG_##src_dev##_DATA_SIZE(	\
-					STM32_DMA_CHANNEL_CONFIG(index, dir)),	\
+			STM32_DT_INST_DMA_CHANNEL_CONFIG(index, dir)),		\
 		.dest_data_size = STM32_DMA_CONFIG_##dest_dev##_DATA_SIZE(	\
-					STM32_DMA_CHANNEL_CONFIG(index, dir)),	\
+			STM32_DT_INST_DMA_CHANNEL_CONFIG(index, dir)),		\
 		/* use single transfers (burst length = data size) */		\
 		.source_burst_length = STM32_DMA_CONFIG_##src_dev##_DATA_SIZE(	\
-					STM32_DMA_CHANNEL_CONFIG(index, dir)),	\
+			STM32_DT_INST_DMA_CHANNEL_CONFIG(index, dir)),		\
 		.dest_burst_length = STM32_DMA_CONFIG_##dest_dev##_DATA_SIZE(	\
-					STM32_DMA_CHANNEL_CONFIG(index, dir)),	\
+			STM32_DT_INST_DMA_CHANNEL_CONFIG(index, dir)),		\
 		.channel_priority = STM32_DMA_CONFIG_PRIORITY(			\
-					STM32_DMA_CHANNEL_CONFIG(index, dir)),	\
+			STM32_DT_INST_DMA_CHANNEL_CONFIG(index, dir)),		\
 		.dma_callback = dma_callback,					\
 		.block_count = 2,						\
 	},									\
 	.src_addr_increment = STM32_DMA_CONFIG_##src_dev##_ADDR_INC(		\
-				STM32_DMA_CHANNEL_CONFIG(index, dir)),		\
+		STM32_DT_INST_DMA_CHANNEL_CONFIG(index, dir)),			\
 	.dst_addr_increment = STM32_DMA_CONFIG_##dest_dev##_ADDR_INC(		\
-				STM32_DMA_CHANNEL_CONFIG(index, dir)),		\
-	.fifo_threshold = STM32_DMA_FEATURES_FIFO_THRESHOLD(		\
-				STM32_DMA_FEATURES(index, dir)),		\
+		STM32_DT_INST_DMA_CHANNEL_CONFIG(index, dir)),			\
+	.fifo_threshold = STM32_DMA_FEATURES_FIFO_THRESHOLD(			\
+		STM32_DT_INST_DMA_FEATURES(index, dir)),			\
 
 
 #ifdef CONFIG_SPI_STM32_DMA
@@ -2378,6 +2386,7 @@ static int spi_stm32_init(const struct device *dev)
 		(BUILD_ASSERT(DT_INST_PROP(id, st_fifo_threshold) <= DT_INST_PROP(id, fifo_size),\
 		     "FIFO threshold should be less than or equal to FIFO size.")))
 
+/* clang-format off */
 #define STM32_SPI_INIT(id)							\
 	SPI_STM32_CHECK_FIFO(id);						\
 										\
@@ -2400,6 +2409,7 @@ static int spi_stm32_init(const struct device *dev)
 		IF_ENABLED(DT_INST_NODE_HAS_COMPAT(id, st_stm32_spi_subghz),	\
 			   (.is_subghzspi = true,))				\
 		IF_ENABLED(DT_HAS_COMPAT_STATUS_OKAY(st_stm32h7_spi), (		\
+			.gpio_control =	DT_INST_PROP(id, st_gpio_control),	\
 			.midi_clocks = DT_INST_PROP(id, midi_clock),		\
 			.mssi_clocks = DT_INST_PROP(id, mssi_clock),		\
 			.fifo_size = DT_INST_PROP(id, fifo_size),		\
@@ -2434,5 +2444,6 @@ static int spi_stm32_init(const struct device *dev)
 				  &api_funcs);					\
 										\
 	STM32_SPI_IRQ_HANDLER(id)
+/* clang-format on */
 
 DT_INST_FOREACH_STATUS_OKAY(STM32_SPI_INIT)

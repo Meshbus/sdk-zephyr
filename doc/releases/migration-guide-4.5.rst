@@ -658,6 +658,17 @@ Digital Microphone
   have been updated. Application code using :c:func:`dmic_configure`, :c:func:`dmic_trigger`, and
   :c:func:`dmic_read` is not impacted.
 
+Disk
+====
+
+* :kconfig:option:`CONFIG_NVME_REQUEST_TIMEOUT` is documented and ranged in
+  seconds. The NVMe request timeout path previously compared that value against
+  :c:func:`k_uptime_get_32` milliseconds without converting, so the default of
+  ``5`` expired after about 5 ms instead of 5 seconds. The driver now converts
+  with ``MSEC_PER_SEC`` before scheduling and expiry checks. Review any
+  non-default setting if the application depended on the former short timeout
+  behavior. (:github:`117809`)
+
 Display
 =======
 
@@ -747,6 +758,10 @@ ESPI
 
 Ethernet
 ========
+
+* The WIZnet Ethernet drivers now share one set of Kconfig options. Replace
+  ``CONFIG_ETH_W5500_*``, ``CONFIG_ETH_W6100_*`` and ``CONFIG_ETH_W6300_*`` with the matching
+  ``CONFIG_ETH_WIZNET_*`` option.
 
 * ``ETHERNET_CONFIG_TYPE_T1S_PARAM`` and the related ``NET_REQUEST_ETHERNET_SET_T1S_PARAM`` has
   been removed. :c:func:`phy_set_plca_cfg` together with :c:func:`net_eth_get_phy` should be
@@ -1509,6 +1524,65 @@ STM32
   ``pinctrl-names``, ``mclk-enable``, ``mclk-divider``, ``synchronous``, and
   ``fifo-threshold``. (:github:`104423`)
 
+* :dtcompatible:`st,stm32-adc` binding has been restructured to reflect the ADC hardware
+  topology. A parent node now represents the ADC common block, which holds the clock and
+  the settings shared by all the ADC instances connected to it, while a new ``child-binding``
+  represents the ADC instances themselves.
+
+  The existing ``&adcN`` node labels still designate the ADC instances, which are now children
+  of a common block node labelled ``&adcN_common``, where ``N`` lists the instances sharing the
+  block (for example ``&adc1_common``, ``&adc12_common`` or ``&adc123_common``). The common block
+  node must be enabled in addition to the instance node.
+
+  The following properties shall be moved from the ``&adcN`` instance node to its ``&adcN_common``
+  parent node: ``clocks``, ``clock-names``, ``st,adc-clock-source``, ``st,adc-prescaler`` and
+  ``vref-mv``. Since the clock is now described once per common block, instances sharing it can
+  no longer be given conflicting clock settings.
+
+  .. tabs::
+
+    .. group-tab:: Before
+
+      .. code-block:: devicetree
+
+          &adc1 {
+            clocks = <&rcc STM32_CLOCK(AHB2, 13)>,
+                     <&rcc STM32_SRC_SYSCLK ADC_SEL(3)>;
+            clock-names = "adcx", "adc_ker";
+            st,adc-clock-source = "ASYNC";
+            st,adc-prescaler = <4>;
+            vref-mv = <3000>;
+            pinctrl-0 = <&adc1_in1_pa0>;
+            pinctrl-names = "default";
+            status = "okay";
+          };
+
+    .. group-tab:: After
+
+      .. code-block:: devicetree
+
+          &adc12_common {
+            clocks = <&rcc STM32_CLOCK(AHB2, 13)>,
+                     <&rcc STM32_SRC_SYSCLK ADC_SEL(3)>;
+            clock-names = "adcx", "adc_ker";
+            st,adc-clock-source = "ASYNC";
+            st,adc-prescaler = <4>;
+            vref-mv = <3000>;
+            status = "okay";
+          };
+
+          &adc1 {
+            pinctrl-0 = <&adc1_in1_pa0>;
+            pinctrl-names = "default";
+            status = "okay";
+          };
+
+  Note that ``vref-mv`` only needs to be set when it differs from its ``3300`` default value.
+
+  For :dtcompatible:`st,stm32f1-adc` and :dtcompatible:`st,stm32f4-adc`, each instance keeps its
+  own register clock, so ``clocks`` and ``clock-names`` stay on the ``&adcN`` node.
+  (:github:`117309`)
+
 * :dtcompatible:`st,hci-stm32wba` and :dtcompatible:`st,stm32wba-ieee802154` nodes
   (with nodelabels ``bt_hci_wba`` and ``ieee802154`` respectively) are now
   children of a top-level :dtcompatible:`st,stm32wba-radio` node with nodelabel
@@ -1651,6 +1725,18 @@ STM32
 
     SoCs of the STM32H5Ex/STM32H5Fx line are not affected by this change as they have always used
     the new names since their introduction in Zephyr.
+
+Storage
+=======
+
+* The ``fs_off`` element of :c:struct:`flash_sector` has been changed from type ``off_t`` to
+  ``ptrdiff_t``. This should make all platforms and toolchains use the native machine register size
+  and not vary based on the POSIX ``off_t`` type inherited from the C library. Picolibc 1.8.12
+  always defines ``off_t`` as a 64-bit integer, even on 32-bit platforms; this change effectively
+  returns the struct to the previous layout when using this C library. For older Picolibc versions
+  and all other supported C libraries, ``ptrdiff_t`` uses the same underlying C type as ``off_t``;
+  this change is intended to preserve the undering C type used for ``fs_off`` across the Picolibc
+  update.
 
 Syscon
 ======
@@ -2063,6 +2149,23 @@ Bluetooth Host
   :c:func:`bt_le_ext_adv_update_param`. Previously it kept the value from
   :c:func:`bt_le_ext_adv_create` even though the controller applied the new one.
 
+* :c:func:`bt_addr_le_to_str` now formats LE addresses with a single-character type prefix,
+  ``P:`` for public and ``R:`` for random, directly followed by the address, e.g.
+  ``R:11:22:33:44:55:66``. The previous ``11:22:33:44:55:66 (random)`` form is no longer
+  produced, and address types carrying additional HCI-level bits, such as
+  ``BT_ADDR_LE_RANDOM_ID``, are formatted by their base type rather than as ``(random-id)`` or
+  a raw hex value. Code that parses Zephyr log or shell output to extract addresses must be
+  updated. :c:macro:`BT_ADDR_LE_STR_LEN` has shrunk from ``30`` to ``20`` accordingly.
+
+* :c:func:`bt_addr_le_from_str` no longer takes a separate address type string. It accepts only
+  the ``P:``/``R:`` prefixed format produced by :c:func:`bt_addr_le_to_str`; the previous
+  ``"XX:XX:XX:XX:XX:XX"`` + ``"public"``/``"random"`` form is not supported. All Bluetooth
+  shell commands that take an LE address (for example ``bt connect``, ``bt disconnect``,
+  ``bt clear``, ``bt fal-add``, ``bt per-adv-sync-create``, ``gatt resubscribe`` and
+  ``bap_broadcast_assistant add_src``) consequently take it as a single
+  ``P:XX:XX:XX:XX:XX:XX`` or ``R:XX:XX:XX:XX:XX:XX`` argument instead of an address followed
+  by a separate type argument.
+
 Bluetooth Mesh
 ==============
 
@@ -2085,6 +2188,22 @@ Networking
   invoked more than once for a single received buffer, once per body fragment,
   for example once per chunk of a chunked response. Applications that assumed a
   single callback per receive must append every fragment they are handed.
+
+* ``CONFIG_NET_TEST_PROTOCOL``, a JSON control channel that let an out of tree
+  TTCN-3 suite drive the TCP stack and read its internal state, has been
+  removed, along with the ``samples/net/sockets/tcp`` sample that was its only
+  system under test. Nothing in the tree enabled the option, and the code
+  behind it had not compiled for several years. The suites that used it were
+  archived by their author.
+
+  Enabling it also turned off initial sequence number randomisation and made
+  ``net_tcp_connect()`` return without waiting for the connection, so a build
+  that had it did not behave like one that did not.
+
+  There is no replacement option, because the replacement is not an option: the
+  conformance tests under :zephyr_file:`tests/net/conformance` drive an
+  unaltered build over the network instead, including a TCP suite covering the
+  same ground. See :ref:`ttcn3_testing`.
 
 * The ``struct dns_server`` type nested in :c:struct:`dns_resolve_context` has been
   renamed to ``struct dns_server_info``. A C++ class member cannot share the name of
@@ -2220,6 +2339,9 @@ Modem
   :c:struct:`modem_cellular_vendor_config`, not :c:struct:`modem_cellular_data`.
 * Cellular modem instance PPP pointer is now automatically populated in
   :c:struct:`modem_cellular_config`. Assignment to :c:struct:`modem_cellular_data` must be removed.
+* Chat script callback argument types have been updated. A new
+  :c:struct:`modem_chat_script_completion_info` pointer is now inserted before the ``user_data``
+  argument.
 
 PTP
 ===
@@ -2491,6 +2613,17 @@ MCUmgr
     ``hash`` buffer is :c:macro:`IMG_MGMT_CLIENT_HASH_MAX_LEN` (64) bytes, and
     the new ``hash_len`` field holds the actual length. Code that reads ``hash``
     must use ``hash_len`` instead of assuming :c:macro:`IMG_MGMT_DATA_SHA_LEN`.
+
+Network buffers
+===============
+
+* :c:func:`net_buf_max_len` and :c:func:`net_buf_simple_max_len` have been deprecated. They
+  returned the capacity of the buffer behind its ``data`` pointer, which is neither the storage
+  size nor the room left for more data. Use :c:func:`net_buf_tailroom` or
+  :c:func:`net_buf_simple_tailroom` to find out how much data can still be added, and
+  :c:func:`net_buf_headroom` or :c:func:`net_buf_simple_headroom` for how much can be pushed in
+  front. Code that used the value as the size of a scratch area starting at ``data`` can
+  compute it as ``buf->len + net_buf_tailroom(buf)``.
 
 POSIX
 =====

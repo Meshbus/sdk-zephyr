@@ -17,4 +17,6 @@ supported:
   - uart
   - clock_control
   - pinctrl
+  - rtc
+  - watchdog
 vendor: infineon
